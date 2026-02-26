@@ -1,0 +1,60 @@
+---
+- name: vCenter Cluster VM Report
+  hosts: localhost
+  gather_facts: yes
+  connection: local
+
+  vars:
+    vcenter_host:  " Vsphere host/IP "
+    vcenter_user:  "  Vsphere USERNAME "
+    vcenter_pass:  " Vsphere PASSWORD "
+    script_path:   "/etc/ansible/scripts/vcenter_vm_health.py"
+    report_dir:    "/etc/ansible/reports"
+    thread_count:  10
+
+  tasks:
+    - name: "PREFLIGHT | Ensure reports directory exists"
+      file:
+        path:  "{{ report_dir }}"
+        state: directory
+        mode:  "0750"
+
+    - name: "COLLECT | Run vCenter VM health script"
+      command: >
+        python3 {{ script_path }}
+        --vc    {{ vcenter_host }}
+        --user  {{ vcenter_user }}
+        --pass  {{ vcenter_pass }}
+        --threads {{ thread_count }}
+      register: vm_output
+      changed_when: false
+      no_log: true
+      timeout: 900
+
+    - name: "REPORT | Save records to reports folder"
+      lineinfile:
+        path:   "{{ report_dir }}/vcenter_vms_{{ ansible_date_time.date }}.json"
+        line:   "{{ item }}"
+        create: yes
+        mode:   "0640"
+      loop: "{{ vm_output.stdout_lines }}"
+      when: vm_output.stdout_lines | length > 0
+
+    - name: "REPORT | Summary"
+      debug:
+        msg: "Saved → {{ report_dir }}/vcenter_vms_{{ ansible_date_time.date }}.json | VMs: {{ vm_output.stdout_lines | length }}"
+
+    - name: "CLEANUP | Find reports older than 30 days"
+      find:
+        paths:    "{{ report_dir }}"
+        patterns: "vcenter_vms_*.json"
+        age:      "30d"
+      register: old_reports
+
+    - name: "CLEANUP | Delete old reports"
+      file:
+        path:  "{{ item.path }}"
+        state: absent
+      loop: "{{ old_reports.files }}"
+      when: old_reports.files | length > 0
+
